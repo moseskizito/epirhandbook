@@ -123,3 +123,5 @@ table(cow.study$vacc,cow.study$lact)
 ### Arrays
 
 result <- array(rpois(18,5),dim = c(2,3,3))
+
+
