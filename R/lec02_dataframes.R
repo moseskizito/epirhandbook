@@ -78,14 +78,17 @@ v
 
 # using cbind to matrix will return them as
 # characters and therefore a dataframe is the solution
-
-cow.study <- data.frame(cowName,lactation,vaccinated)
+IDD <- 1:10
+cow.study <- data.frame(IDD,cowName,lactation,vaccinated)
 class(cow.study)
 class(cow.study[,'cowName'])
+
 cow.study[,"cowName"] <- as.factor(cow.study[,'cowName'])
+class(cow.study[,'cowName'])
 
+aggregate(lactation ~ cowName, FUN = mean, data = cow.study)
 
-feed.group <- c(rep("A",5),rep("B",5))
+feed.group <- c(rep("A",5))
 class(feed.group)
 
 cow.study <- cbind(cow.study,feed.group)
