@@ -1,3 +1,7 @@
+# -------------------------------------------------
+# The goal is to predict malaria prevalence
+# in The Gambia, Africa
+# -------------------------------------------------
 pacman::p_load(
   dplyr,
   ggplot2,
@@ -15,14 +19,38 @@ pacman::p_load(
 install.packages("sf")
 install.packages("terra")
 install.packages("rgdal")
+
+## ----------------------------------------------------
+
+install.packages("INLA",
+                 repos = "https://inla.r-inla-download.org/R/stable", dep = TRUE)
+
+install.packages("fmesher", repos = "https://inla.r-inla-download.org/R/stable")
+
+if (!requireNamespace("INLA", quietly = TRUE)) {
+  install.packages("INLA", repos = "https://inla.r-inla-download.org/R/stable")
+}
+
+install.packages("C:/Users/HP/Downloads/INLA_24.06.27.zip", repos = NULL, type = "win.binary")
+
+library(INLA)
+## ___________________________________________________--
 library(terra)
 library(sf)
 library(rgdal)
 library(sp)
 library(geoR)
 library(raster)
+library(dplyr)
+
+## ----------------------------------------------
+
+# loading the geoR package and attach the gambia data
+
+library(geoR)
 data(gambia)
 gb <- gambia
+
 
 #Explanation of the gambia variables
 # x: x-coordinate of the village (UTM),
@@ -36,10 +64,14 @@ gb <- gambia
 
 dim(gb)
 
-head(gb)
+head(gb, 3)
+head(gambia,3)
 
-dim(unique(gambia[, c("x", "y")]))
-
+# ---------------------------------------------
+# The data is given at individual level and the analysis
+# is done at village level, therefore
+# we aggregate as below.
+# --------------------------------------------
 
 d <- group_by(gambia, x, y) %>%
   summarize(total = n(),
@@ -59,16 +91,56 @@ d[, c("long", "lat")] <- coordinates(spst)
 
 head(d)
 
-# Map prevalence
+# prevalence
 
 library(leaflet)
+library(terra)
 library(geodata)
+
+# ---------------------------------
+# look at the dimension of the unique coordinates
+# and see that the 2035 tests are conducted in
+# 65 unique locations
+# ----------------------------------------
+
+dim(unique(gambia[, c("x", "y")]))
+
+# ------------------------------------------
+# Transform coordinates
+
+# The spTransform() function of the sp package.
+# helps to transform UTM coordinates in the
+# data to geographic coordinates
+# ------------------------------------------
+
+library(sp)
+library(rgdal)
+
+sps  <- SpatialPoints(d[, c("x", "y")], proj4string = CRS("+proj=utm +zone=28"))
+spst <- spTransform(sps, CRS("+proj=longlat +datum=WGS84"))
+
+# --------------------------------------------
+# Here we add the longitude and latitude variables
+# to the data frame d
+# ---------------------------------------------
+
+d[, c("long", "lat")] <- coordinates(spst)
+
+#d[, c("long", "lat")] <- round(coordinates(spst), 3)
+head(d)
+
+# -----------------------------------------------
+# Map Prevalence
+# -----------------------------------------------
+
+library(leaflet)
 
 pal <- colorBin("viridis", bins = c(0, 0.25, 0.5, 0.75, 1))
 leaflet(d) %>%  addProviderTiles(providers$CartoDB.Positron) %>%
   addCircles(lng = ~long, lat = ~lat, color = ~pal(prev)) %>%
   addLegend("bottomright", pal = pal, values = ~prev, title = "Prevalence") %>%
   addScaleBar(position = c("bottomleft"))
+
 
 # Environmental covariates
 
@@ -136,14 +208,20 @@ library(dplyr)
 coords <- d[, c("long", "lat")]
 
 # Convert to SpatialPoints object if needed
-coordinates(coords) <- ~ long + lat
 
-# Extract raster values at these coordinates
-d$alt <- extract(r, coords)
-head(d)
-
+# ---------------------------------------
+# We add the elevation variable to the data frame d
+# because we will use it as a covariate in the model.
+# ---------------------------------------------
 d$alt <- extract(r, d[, c("long", "lat")])
 head(d)
+
+
+# -------------------------------------
+# Modelling
+# We specify the model to predict malaria prevalence
+# in The Gambia, and detail the steps to fit the model
+# using the INLA and SPDE approaches.
 # Build mesh
 
 library(INLA)
@@ -168,8 +246,53 @@ lengths(indexs)
 # Projector matrix
 
 A <- inla.spde.make.A(mesh = mesh, loc = coo)
+dim(A)
 
 # Prediction data
+
 dp <- rasterToPoints(r)
 dp <- terra::as.points(r)
 dim(dp)
+
+
+ra <- aggregate(r, fact = 5, fun = mean)
+
+dp <- terra::as.points(ra)
+dim(dp)
+
+coop <- dp[, c("x", "y")]
+# Extract coordinates as a matrix
+coop <- geom(dp)[, c("x", "y")]
+
+# Check dimensions or structure
+dim(coop)
+head(coop)
+
+
+# -------------------------------
+# Projector matrix
+# construct the matrix that projects the locations
+# where we will do the predictions.
+# ----------------------------------------
+
+Ap <- inla.spde.make.A(mesh = mesh, loc = coop)
+dim(Ap)
+
+
+# Stack data for the estimation and prediction
+
+
+#stack for estimation stk.e
+stk.e <- inla.stack(tag = "est",
+data = list(y = d$positive, numtrials = d$total),
+A = list(1, A),
+effects = list(data.frame(b0 = 1, cov = d$alt), s = indexs))
+
+#stack for prediction stk.p
+stk.p <- inla.stack(tag = "pred",
+data = list(y = NA, numtrials = NA),
+A = list(1, Ap),
+effects = list(data.frame(b0 = 1, cov = dp[, 3]), s = indexs))
+
+#stk.full has stk.e and stk.p
+stk.full <- inla.stack(stk.e, stk.p)
